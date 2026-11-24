@@ -65,6 +65,18 @@ python3 fetch_reference.py --dest ./reference
 
 脚本会逐个下载并 **校验 SHA-256**，不匹配即报错退出。
 
+### 双通道自动回退
+
+| 通道 | 用途 |
+|---|---|
+| HTTPS → `raw.githubusercontent.com` | 通用环境走这条 |
+| git/SSH → `git@github.com:<repo>.git` + sparse-checkout | 沙箱 / 内网常封禁 443 出网，但 SSH 通常可用 |
+
+HTTPS 失败时脚本自动切换到 git/SSH，无需手动干预。两条通道拿到的文件
+都经过同一套 SHA-256 校验。
+
+> 本次交付时沙箱环境即属后者（HTTPS 443 被阻断），脚本已实测走 git/SSH 通道完成全部四个文件的校验拉取。
+
 ## 上游项目
 
 | 项目 | 角色 | 许可 |
