@@ -207,3 +207,67 @@ TripoSR 重建出来的**几何**其实很准（呆毛 / 鳍耳 / 蕾丝 / 裙�
 - 背面（尤其尾巴根部）为模型推测
 
 这四点属于 image-to-3D 路线的固有限制，不是管线 bug。
+
+---
+
+## 7. UV 贴图：把顶点色固化成真正的纹理
+
+顶点色（COLOR_0）在 glTF 里是合法的颜色通道，但**很多查看器/引擎默认只读
+baseColorTexture** —— 打开 GLB 会看到"没有贴图"。所以又做了一步：把顶点色
+**烘焙成真正的 PNG 贴图**，GLB 里同时带 `TEXCOORD_0` + `baseColorTexture` + `COLOR_0`。
+
+### 7.1 UV 方案：自己写 box projection，不用 Blender 的 smart project
+
+TripoSR 出来的是 marching cubes 网格（99,154 个碎片三角形），Blender 的
+`smart_project` 会把它拆成几万个小 UV 岛 —— 实测**贴图空间利用率只有 6.2%**，
+贴图退化成马赛克。
+
+改用逐面 box projection（`make_textured_glb.py`，全 numpy）：
+
+| 步骤 | 做法 |
+|---|---|
+| 分组 | 逐三角面算法线，按主轴分到 6 组（±X / ±Y / ±Z） |
+| 投影 | 每组投影到对应的 2D 平面，各占贴图的 1/6（2 列 × 3 行） |
+| 拆点 | glTF 的 UV 是 per-vertex，box mapping 是 per-face → 必须按 face-corner 拆顶点（49,577 → 297,462） |
+| 烘焙 | numpy 光栅化（重心坐标插值 + z-buffer），**覆盖率 100%** |
+
+因为贴图内容是「烘焙顶点色」得来的，UV 的拉伸**不影响正确性**，只影响把贴图
+当独立图片看时的观感。
+
+### 7.2 踩过的五个坑
+
+| 坑 | 现象 | 结论 |
+|---|---|---|
+| `asset.version` 漏填 | Blender 报 `Bad glTF: no version` | 这个报错指的是 **asset.version**，不是文件头 |
+| bufferView 对齐按块数算 | Blender 拒绝导入 | 对齐必须按**字节数**（`len(blobs) % 4` 是错的） |
+| z-buffer 方向反 | 贴图满屏黑洞、覆盖率 6.2% | 相机在 Blender −Y → export_yup 后 **glTF Z 越大越近**，要保留**最大** Z |
+| 深度轴搞错 | 用高度当深度，贴图全乱 | `orient_up`/`normalize` 改的是 object transform，glTF 导出会变成 node TRS —— POSITION 仍是局部坐标。需先 `transform_apply` 把变换烘焙进 mesh |
+| `normalized` accessor 未换算 | 颜色放大 256 倍 | Blender 导出顶点色会用 **UNSIGNED_SHORT normalized**（0..65535），读的时候要 `/65535` |
+
+### 7.3 贴图版与顶点色版的颜色对齐
+
+两条路在 Blender 里走的是不同的色彩管理路径：
+
+- **Color Attribute**：BYTE_COLOR 存的是 sRGB 字节，但节点输出**不做线性化**，
+  直接当线性值用（实测：值 0.5 → 渲染出 130/255）
+- **PNG 贴图**：Blender 会做 sRGB → 线性转换
+
+要对齐，PNG 里必须把 HSV 结果**再 sRGB 编码一次**：
+
+```
+顶点色 sRGB → HSV(S=1.75) → res        （= 顶点色版的 Base Color）
+PNG 存 lin2srgb(res) → Blender 线性化 → 正好还原 res
+```
+
+实测对齐后两者渲染均值差 **< 3%**（只剩 8bit 量化误差）：
+顶点色版 `(86.4, 100.8, 120.4)` vs 贴图版 `(84.1, 98.3, 117.4)`。
+
+### 7.4 交付的 GLB 结构
+
+| 通道 | 内容 |
+|---|---|
+| `POSITION` / `NORMAL` | 297,462 顶点（按 face-corner 拆点） |
+| `TEXCOORD_0` | box projection UV（2×3 布局） |
+| `COLOR_0` | BYTE 顶点色（供只读顶点色的查看器） |
+| `baseColorTexture` | 内嵌 PNG（2048²，mipmap + Linear 过滤 + EXTEND 环绕） |
+| `material` | metallic 0 / roughness 0.62 / doubleSided |

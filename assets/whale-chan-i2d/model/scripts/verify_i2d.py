@@ -55,9 +55,16 @@ def glb_stats(path):
         if "indices" in p:
             ntris += g["accessors"][p["indices"]]["count"] // 3
     mats = [m.get("name", "?") for m in g.get("materials", [])]
+    has_uv = any("TEXCOORD_0" in p.get("attributes", {}) for p in prims)
+    has_tex = any("baseColorTexture" in
+                  m.get("pbrMetallicRoughness", {}) for m in g.get("materials", []))
+    embedded = any("bufferView" in im for im in g.get("images", []))
+    tex_names = [str(t) for t in g.get("textures", [])]
     return dict(version=version, nprims=len(prims), nverts=nverts, ntris=ntris,
                 has_color=has_color, nmat=len(mats), mats=mats,
-                nmesh=len(g.get("meshes", [])), nimg=len(g.get("images", [])))
+                nmesh=len(g.get("meshes", [])), nimg=len(g.get("images", [])),
+                has_uv=has_uv, has_tex=has_tex, embedded_tex=embedded,
+                tex_names=tex_names)
 
 
 # ── PNG 尺寸 ──
@@ -125,6 +132,11 @@ def main():
               f"primitive×{st['nprims']}, mesh×{st['nmesh']}")
         check("顶点数 > 20000", st["nverts"] > 20000, f"{st['nverts']:,}")
         check("三角面数 > 50000", st["ntris"] > 50000, f"{st['ntris']:,}")
+        # 贴图通道
+        check("含 TEXCOORD_0（UV 通道）", st["has_uv"], "")
+        check("含 baseColorTexture 贴图", st["has_tex"], f"image×{st['nimg']}")
+        check("贴图已嵌入 GLB（非外链）", st["nimg"] > 0 and st["embedded_tex"],
+              st["tex_names"])
     else:
         check("GLB 存在", False, glb)
 

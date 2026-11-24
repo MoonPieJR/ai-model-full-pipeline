@@ -71,9 +71,21 @@
 1. 以参考图经**扩散模型重绘**生成的手办效果图作为中间输入；
 2. 由 TripoSR 做**单图前馈三维重建**，背面、底部为模型推测；
 3. 在 Blender 中做**朝向矫正、顶点色重建（CORNER→VERTEX 聚合）、Laplacian 平滑、
-   灯光与构图调整**，并输出带顶点色的 GLB。
+   灯光与构图调整**；
+4. 顶点色再经**分带色调迁移**与**色点抹平**，随后用自写的 box projection 烘焙成
+   **2048² UV 纹理贴图**（UV + baseColorTexture + COLOR_0 三通道齐备）。
 
 原画的著作权与署名权归上述作者所有。
+
+### 产物清单
+
+| 文件 | 内容 |
+|---|---|
+| `model/whale-chan-i2d.blend` | Blender 工程（材质/灯光/相机） |
+| `model/whale-chan-i2d.glb` | 带 UV + 内嵌 baseColorTexture + 顶点色的 GLB |
+| `model/whale-chan-i2d-basecolor.png` | 独立贴图（2048²） |
+| `renders/*.png` | 四视角 1024² 渲染图 |
+| `video/whale-chan-turntable.mp4` | 转台动画 |
 
 ---
 

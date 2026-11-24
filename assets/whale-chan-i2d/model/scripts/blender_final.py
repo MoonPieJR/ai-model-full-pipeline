@@ -76,17 +76,39 @@ def main():
     meshes, _ = bp.import_glb(glb, "Import")
     bp.orient_up(meshes)
     bp.normalize(meshes)
-    bp.laplacian_smooth(meshes, 0.25, 2)
-    print(f"[model] {len(meshes)} 对象 / "
-          f"{sum(len(m.data.vertices) for m in meshes)} 顶点")
+    # Laplacian 平滑依赖**顶点邻接关系**。带 UV 的 GLB 为了承载 per-face
+    # box-mapping UV 必须按 face-corner 拆点（49,577 → 297,462），
+    # 拆点后每个顶点只属于一个三角形、邻接全断 —— 此时再平滑会把几何打散成点阵。
+    # 而拆点版的几何在生成 GLB 之前就已经平滑过了，这里直接跳过。
+    nv = sum(len(m.data.vertices) for m in meshes)
+    if os.environ.get("SKIP_SMOOTH") == "1" or nv > 100000:
+        print(f"[model] {len(meshes)} 对象 / {nv} 顶点  "
+              f"（拆点版，跳过 Laplacian 平滑）")
+    else:
+        bp.laplacian_smooth(meshes, 0.25, 2)
+        print(f"[model] {len(meshes)} 对象 / {nv} 顶点")
 
     coll = bp.get_coll("Render")
     cam = bp.setup_camera(coll)
     bp.frame_model(cam, meshes, 0)
 
-    mat = bp.build_fixed_material(meshes, "WhaleChan_Fixed",
-                                  color_boost=1.0, saturation=sat)
-    bp.apply_material(meshes, mat)
+    # 若 GLB 自带 PBR 贴图材质（baseColorTexture），就沿用它 ——
+    # 否则会用顶点色材质覆盖掉贴图，交付的 GLB 与渲染图就对不上了。
+    has_tex = False
+    for o in meshes:
+        if o.type != "MESH":
+            continue
+        for m in o.data.materials:
+            if m and m.use_nodes:
+                for n in m.node_tree.nodes:
+                    if n.type == "TEX_IMAGE" and n.image:
+                        has_tex = True
+    if has_tex:
+        print("[mat]  沿用 GLB 自带 baseColorTexture 材质")
+    else:
+        mat = bp.build_fixed_material(meshes, "WhaleChan_Fixed",
+                                      color_boost=1.0, saturation=sat)
+        bp.apply_material(meshes, mat)
     bp.setup_world(world)
     bp.setup_lights(coll)
     for ob in coll.objects:
