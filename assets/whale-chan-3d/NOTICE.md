@@ -10,7 +10,7 @@
 | 内容 | 许可 | 商业用途 |
 |---|---|---|
 | **模型产物**（.blend / .glb / renders） | CC BY-NC-SA 4.0 | ❌ 禁止 |
-| **建模脚本**（`model/build/*.py`） | MIT | ✅ 允许 |
+| **建模脚本**（`model/scripts/*.py`） | MIT | ✅ 允许 |
 | **上游参考素材**（不随仓库分发，按需下载） | CC BY-NC-SA 4.0 | ❌ 禁止 |
 | 方法论参考（`dsh-blender-plugin` 的 SOP） | BSD-3-Clause | ✅ 允许 |
 

@@ -34,7 +34,7 @@ whale-chan-3d/
 ├── model/
 │   ├── whale-chan.blend          # Blender 4.2 工程文件（可编辑源）
 │   ├── whale-chan.glb            # glTF 2.0 二进制（通用导入）
-│   └── build/
+│   └── scripts/
 │       ├── SPEC.md               # 冻结的建模规格（唯一真源）
 │       ├── walechan_geom.py      # 几何工具层：lathe / tube / ribbon / cyl_patch …
 │       ├── walechan_parts.py     # 部件装配层：28 个部件
@@ -70,7 +70,7 @@ whale-chan-3d/
 ```bash
 pip install bpy==4.2.0          # 或用官方 Blender 4.2 内置 Python
 python reference/fetch_reference.py --dest reference
-cd model/build
+cd model/scripts
 python run_build.py --samples 96 --res 900 --out ../out
 ```
 
@@ -82,7 +82,7 @@ python run_build.py --samples 96 --res 900 --out ../out
 `verify_outputs.py` 是**独立验收脚本**，额外覆盖 G4（渲染占比）与 G5（导出格式）：
 
 ```bash
-python3 model/build/verify_outputs.py --out out
+python3 model/scripts/verify_outputs.py --out out
 # → 逐项打印 G1–G6 判定，全通过则退出码 0
 ```
 
