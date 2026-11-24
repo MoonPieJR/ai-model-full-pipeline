@@ -1,0 +1,29 @@
+{
+  "G1_head_body_ratio": 2.867,
+  "G1_pass": true,
+  "G2_group_count": 28,
+  "G2_object_count": 28,
+  "G2_pass": true,
+  "G3_empty_meshes": [],
+  "G3_meshes_without_material": [],
+  "G3_pass": true,
+  "bbox_min": [
+    -0.9043,
+    -0.6847,
+    0.0
+  ],
+  "bbox_max": [
+    0.9043,
+    0.6847,
+    2.8726
+  ],
+  "total_height_BU": 2.8726,
+  "head_height_BU": 1.002,
+  "width_BU": 1.8087,
+  "depth_BU": 1.3694,
+  "outputs": {
+    "blend": "/workspace/model/out/whale-chan.blend",
+    "glb": "/workspace/model/out/whale-chan.glb"
+  },
+  "elapsed_sec": 462.1
+}
