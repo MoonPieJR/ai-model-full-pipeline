@@ -312,12 +312,15 @@ def apply_material(objs, mat):
 
 # ────────────────────────── 灯光与相机 ──────────────────────────
 
-KEY = (3.2, -4.4, 5.0)
-FILL = (-4.6, -2.4, 2.4)
+# 灯位（相机在 Blender -Y 方向 → -Y 即正面）
+# KEY 原为 (3.2,-4.4,5.0)：太高，发帘凹陷里的脸被上方头发挡光 → 脸发灰。
+#      压低 + 更靠前，让主光正面打进去。
+KEY = (2.9, -5.0, 3.7)
+FILL = (-4.2, -3.4, 2.3)
 RIM = (-1.6, 5.0, 4.2)
 
 
-def setup_world(strength=0.42, color=(0.92, 0.90, 0.87)):
+def setup_world(strength=0.42, color=(0.84, 0.90, 1.00)):
     sc = bpy.context.scene
     sc.world.use_nodes = True
     bg = sc.world.node_tree.nodes.get("Background")

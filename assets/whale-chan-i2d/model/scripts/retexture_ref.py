@@ -176,6 +176,62 @@ def fit_landmarks(ref_mask, pos, flip):
     return fx, fy, tx, ty
 
 
+# ─────────────────── 纵向比例配准（轮廓面积剖面 DTW） ───────────────────
+def area_profile_model(pos, nb=256):
+    """模型每一水平条带的「面积」≈ 该条带顶点数（marching cubes 密度近似均匀）。"""
+    y = pos[:, 1]
+    y0, y1 = y.min(), y.max()
+    b = np.clip(((y - y0) / max(y1 - y0, 1e-9) * (nb - 1)).round().astype(int),
+                0, nb - 1)
+    cnt = np.bincount(b, minlength=nb).astype(np.float64)
+    return cnt / max(cnt.max(), 1e-9)
+
+
+def area_profile_ref(mask, nb=256):
+    """参考图每一行的「面积」= 该行 alpha 像素数（同样归一化）。"""
+    area = mask.sum(axis=1).astype(np.float64)
+    idx = np.where(mask.any(axis=1))[0]
+    if len(idx) == 0:
+        return np.ones(nb), np.zeros(nb, dtype=int)
+    r0, r1 = idx.min(), idx.max()
+    rows = np.linspace(r0, r1, nb).round().astype(int)
+    prof = area[rows]
+    return prof / max(prof.max(), 1e-9), rows
+
+
+def dtw_map(a_mod, a_ref, slope_pen=0.10):
+    """DTW 对齐两条剖面 → 模型条带 → 参考图行的单调映射。
+
+    单图重建的**比例**和原图不同（实测 TripoSR 把头重建小了约 30%），
+    全局仿射只能对齐总高，总高对齐了脸就会错位到头顶。
+    用「面积剖面」对齐可以把头/身/裙的相对高度自动配准。
+    """
+    n, m = len(a_mod), len(a_ref)
+    INF = 1e18
+    D = np.full((n + 1, m + 1), INF)
+    D[0, 0] = 0.0
+    for i in range(1, n + 1):
+        c = np.abs(a_mod[i - 1] - a_ref)
+        D[i, 1:] = c + np.minimum(
+            np.minimum(D[i - 1, :-1], D[i - 1, 1:] + slope_pen),
+            D[i, :-1] + slope_pen)
+    i, j = n, m
+    back = np.zeros(n, dtype=np.float64)
+    while i > 0 and j > 0:
+        back[i - 1] = j - 1
+        if i > 1 and j > 1 and D[i - 1, j - 1] <= D[i - 1, j] and D[i - 1, j - 1] <= D[i, j - 1]:
+            i, j = i - 1, j - 1
+        elif i > 1 and D[i - 1, j] <= D[i, j - 1]:
+            i, j = i - 1, j
+        else:
+            i, j = i, j - 1
+    # 缺口用插值补齐，并强制单调
+    good = np.where(back >= 0)[0]
+    back = np.interp(np.arange(n), good, back[good])
+    back = np.maximum.accumulate(back)
+    return back
+
+
 # ─────────────────── 去光照（低频压平） ───────────────────
 def flatten_shading(rgb, alpha, sigma_frac=0.05):
     """参考图是「渲染图」，明暗是烘焙进去的。压掉低频光照当 albedo 用，
@@ -420,22 +476,141 @@ def main():
 
     y_lo = Y0 + (np.arange(NB) / NB) * (Y1 - Y0)
     y_hi = Y0 + ((np.arange(NB) + 1) / NB) * (Y1 - Y0)
-    r_lo = np.clip(np.round(fy * y_hi + ty).astype(int), 0, len(rx0) - 1)
-    r_hi = np.clip(np.round(fy * y_lo + ty).astype(int), 0, len(rx0) - 1)
-    rx0_bin = np.full(NB, np.nan)
-    rx1_bin = np.full(NB, np.nan)
-    for i in range(NB):
-        a, b = min(r_lo[i], r_hi[i]), max(r_lo[i], r_hi[i])
-        seg0, seg1 = rx0[a:b + 1], rx1[a:b + 1]
-        ok = seg1 >= 0
-        if ok.any():
-            rx0_bin[i] = seg0[ok].min()
-            rx1_bin[i] = seg1[ok].max()
-    for arr in (rx0_bin, rx1_bin):
-        bad = ~np.isfinite(arr)
-        if bad.any():
-            good = np.where(~bad)[0]
-            arr[bad] = np.interp(np.where(bad)[0], good, arr[good])
+
+    # ── 纵向配准 ──────────────────────────────────────────────────
+    #   单图重建的内部比例和原图不同：TripoSR 把**脸**放在了头的偏下位置，
+    #   全局仿射只能对齐总高 → 脸会整体偏低（实测偏低约 38% 头高）。
+    #   ⚠ 曾试过「轮廓面积剖面 DTW」，但模型的头发体量与原图差异太大，
+    #     剖面匹配把头部压得更扁，反而更差 → 放弃。
+    #   改用「头部区域纵向微调 + 自动搜索」：在头部整体上下平移贴图采样，
+    #   取「模型正面头部顶点采到肤色的比例」最大的平移量 ——
+    #   对齐正确时脸正好压在脸上，比例达到峰值；错位时脸压在头发上，比例骤降。
+    rows_of_bin = fy * y_lo + ty
+
+    # 参考图逐行的左右轮廓
+    valid = rx1 >= 0
+    r_idx = np.arange(len(rx0))
+    rx0_f = np.interp(r_idx, r_idx[valid], rx0[valid])
+    rx1_f = np.interp(r_idx, r_idx[valid], rx1[valid])
+
+    # 头部区域：模型 y > 2.2（头顶到下巴）
+    HEAD_Y = 2.2
+    y_center = (y_lo + y_hi) / 2
+    # ⚠ 头部的修正必须做成「拉伸」而不是「平移」：
+    #   平移需要一段过渡带把位移渐隐，而位移梯度会反超基线
+    #   (609 px/BU) → 映射翻折 → 贴图被复制（渲染里出现两张脸）。
+    #   拉伸的梯度与基线同号，数学上不可能翻折 ✓
+    #   Δ(y) = Δ_head · bump(y)：在头底(y=2.2)最大，头顶衰减为 0，
+    #   向下用同样宽的过渡带渐隐，保证 C1 连续。
+    #   鼓包峰值放在**脸的高度**（PEAK_Y≈2.35），而不是头底 ——
+    #   峰值放在头底时脸所在的权重只有 0.09，求解会发散。
+    PEAK_Y = 2.35
+    TAPE = 0.55
+    ramp = np.zeros(NB, dtype=np.float64)
+    # ⚠ _up 必须在峰值处为 0、顶端为 1（方向写反过 → 头部区域硬跳变 → 贴图接缝）
+    _up = np.clip((y_center - PEAK_Y) / max(Y1 - PEAK_Y, 1e-9), 0, 1)
+    _dn = np.clip((PEAK_Y - y_center) / TAPE, 0, 1)   # ⚠ 方向：峰值在 PEAK_Y，向下衰减
+    ramp = np.where(y_center >= PEAK_Y,
+                     0.5 * (1 + np.cos(np.pi * _up)),
+                     0.5 * (1 + np.cos(np.pi * _dn)))
+
+    # 每个顶点在参考图上的采样位置（行、列）
+    cell_rows_v = np.clip(np.round((Y1 - pos[:, 1]) / max(Y1 - Y0, 1e-9) * CELL_H - 0.5
+                             ).astype(int), 0, CELL_H - 1)
+    # cell 列索引 ↔ 模型 x：xj[i] = X0 + (i+0.5)/CELL_W*(X1-X0)
+    # ⚠ 用**原始** pos[:,0]。翻转只发生在「参考图列 = fx*xj_f + tx」那一步；
+    #   cell 网格本身建立在原始 x 网格上。
+    cell_cols_v = np.clip(np.round((pos[:, 0] - X0) / max(X1 - X0, 1e-9) * CELL_W - 0.5
+                             ).astype(int), 0, CELL_W - 1)
+    bin_of_v = np.clip(((pos[:, 1] - Y0) / max(Y1 - Y0, 1e-9) * NB).astype(int),
+                       0, NB - 1)
+    # 正面头部顶点：头区域内、法线朝前（+Z）
+    front_head = (pos[:, 1] > HEAD_Y) & (pos[:, 2] > 0.05)
+    if nrm is not None:
+        front_head &= (nrm[:, 2] > 0.35)
+
+    # ── 头部精调：把模型的脸对齐到参考图的脸 ────────────────────────
+    #   参考图里「脸」= 头部区域最大的肤色连通域；
+    #   模型里「脸」  = 头部区域最靠前的顶点（鼻子）。
+    #   在头部整体平移贴图采样，最大化「模型脸的顶点落进参考图脸里」的比例。
+    #   ⚠ 早先用「肤色比例」当指标会被轮廓外扩伪影污染（边缘一圈假肤色），
+    #     改用「脸 ↔ 脸」重叠率，峰值尖锐且方向正确。
+    skin = ((albedo[..., 0] > 0.72) & (albedo[..., 0] > albedo[..., 2] + 0.04)
+            & (albedo[..., 1] > 0.55) & (ref_a_full > 0.5))
+    _ys, _xs = np.where(ref_a_full > 0.5)
+    skin[_ys.min() + int((_ys.max() - _ys.min()) * 0.40):, :] = False
+    _lab, _n = ndimage.label(skin)
+    if _n > 0:
+        _sz = ndimage.sum(skin, _lab, range(1, _n + 1))
+        face_mask = (_lab == int(np.argmax(_sz)) + 1)
+    else:
+        face_mask = np.zeros_like(skin)
+    _hz = pos[pos[:, 1] > HEAD_Y, 2]
+    _thr = np.percentile(_hz, 97)
+    face_v = (pos[:, 1] > HEAD_Y) & (pos[:, 2] >= _thr)
+
+    xf_probe = -pos[:, 0] if flip else pos[:, 0]
+    g0_probe_bin = np.interp(rows_of_bin, r_idx, rx0_f)
+    dy_probe_bin = g0_probe_bin - (fx * xm0 + tx)
+
+    def _face_hit(dy_px, dx_px):
+        r = rows_of_bin[bin_of_v[face_v]] + ramp[bin_of_v[face_v]] * dy_px
+        c = fx * xf_probe[face_v] + tx + dy_probe_bin[bin_of_v[face_v]] + dx_px
+        ok = (r >= 0) & (r < ref.shape[0]) & (c >= 0) & (c < ref.shape[1])
+        if ok.sum() < 20:
+            return 0.0
+        rr = np.clip(r[ok], 0, ref.shape[0] - 1).astype(int)
+        cc = np.clip(c[ok], 0, ref.shape[1] - 1).astype(int)
+        return float(face_mask[rr, cc].mean())
+    # ── 头部对齐：用**保序的节点插值**建立纵向映射 ──────────────────
+    #   节点（模型 y → 参考图行）：
+    #     头顶 Y1  → 仿射行（29）
+    #     鼻尖高度 → 参考图脸的中心行（几何实测）
+    #     y=2.0   → 仿射行
+    #     脚底 Y0  → 仿射行
+    #   节点行号严格递增 → 映射严格单调 → 数学上不可能折叠 ✓
+    #   ⚠ 之前用「平移 + 渐隐过渡带」导致行映射翻折，贴图被复制成两张脸；
+    #     平移的梯度会反超仿射基线（609 px/BU），改节点插值后彻底规避。
+    _fy, _fx_ = np.where(face_mask)
+    face_cr, face_cc = float(_fy.mean()), float(_fx_.mean())
+    nose_y = float(pos[face_v, 1].mean())
+    r_top = fy * Y1 + ty
+    r_bot = fy * Y0 + ty
+    r_mid = fy * 2.0 + ty
+    #   ⚠ 用 PCHIP（三次保序插值）而不是线性插值：线性会在节点处留下斜率断裂，
+    #     贴图上会出现一道明显的横向接缝（脸被切成两半）。
+    from scipy.interpolate import PchipInterpolator
+    knots_y = np.array([Y1, nose_y, 1.8, 0.9, Y0], dtype=np.float64)
+    knots_r = np.array([r_top, face_cr, fy * 1.8 + ty, fy * 0.9 + ty, r_bot],
+                       dtype=np.float64)
+    for _k in range(1, len(knots_y)):          # 保证行号严格递增
+        if knots_r[_k] <= knots_r[_k - 1]:
+            knots_r[_k] = knots_r[_k - 1] + 1.0
+    if knots_r[0] > knots_r[1]:
+        knots_r[0] = knots_r[1] - 1.0
+    _pchip = PchipInterpolator(knots_y[::-1], knots_r[::-1])
+    rows_of_bin = _pchip(y_lo)
+    print(f"[head] 纵向节点(PCHIP)：" + "  ".join(
+        f"y{y:.2f}→行{r:.0f}" for y, r in zip(knots_y, knots_r)))
+
+    # 横向：让模型脸的中心列对齐参考图脸的中心列（整行平移，不会折叠）
+    g0_probe_bin = np.interp(rows_of_bin, r_idx, rx0_f)
+    dy_probe_bin = g0_probe_bin - (fx * xm0 + tx)
+    xf_probe = -pos[:, 0] if flip else pos[:, 0]
+    c_n = fx * xf_probe[face_v] + tx + dy_probe_bin[bin_of_v[face_v]]
+    head_dx = float(face_cc - c_n.mean())
+    print(f"[head] ★ 脸部对齐：横向微调 {head_dx:+.0f}px，"
+          f"模型脸顶点落在参考图脸内 "
+          f"{_face_hit(0.0, head_dx)*100:.1f}%（脸顶点 {int(face_v.sum()):,} 个）")
+    # 自检：映射必须单调（否则贴图会被折叠，出现重影）
+    _d = np.diff(rows_of_bin)
+    print(f"[head] 纵向映射单调性检查：步长 min {_d.min():.2f} / max {_d.max():.2f} px"
+          f"（max 必须 < 0，否则贴图会折叠成重影）")
+    assert _d.max() < 0, "纵向映射非单调，贴图会折叠"
+
+    ref_row_of_bin = rows_of_bin
+    rx0_bin = np.interp(ref_row_of_bin, r_idx, rx0_f)
+    rx1_bin = np.interp(ref_row_of_bin, r_idx, rx1_f)
     def _mem(tag):
         import resource
         print(f"[mem ] {tag}: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024:.0f} MB", flush=True)
@@ -460,8 +635,9 @@ def main():
     # 逐行缩放会把贴图撕成条纹（尾巴把行轮廓撑宽 → 头部被压扁）；
     # 纯剪切只修正「整行偏移」（实测模型头部中心偏 0.14 BU），不会撕裂。
     dy = (g0 - (fx * m0 + tx))
-    cols2 = fx * xj_f[None, :] + tx + dy
-    rows = fy * (Y1 - (np.arange(CELL_H) + 0.5) / CELL_H * (Y1 - Y0)) + ty
+    cols2 = fx * xj_f[None, :] + tx + dy + head_dx * ramp[cell_rows][:, None]
+    # 纵向：改用 DTW 配准后的「模型行 → 参考图行」映射
+    rows = ref_row_of_bin[cell_rows].astype(np.float64)
     grid_r = np.clip(rows, 0, ref.shape[0] - 1).astype(np.float64)
     grid_c = np.clip(cols2, 0, ref.shape[1] - 1).astype(np.float64)
     # ⚠ grid_c 已是二维（逐行对齐），不能再过 np.meshgrid —— 那会把形状撑成
@@ -473,6 +649,18 @@ def main():
                            for c in range(3)], axis=-1)
     front_a = ndimage.map_coordinates(ref_a_full, (R, C), order=1,
                                       mode="nearest") > 0.5
+    # ── 接缝诊断：找出 cell grid 里行间差异最大的行，并打印该行附近的
+    #    纵向映射 / 横向对齐量，定位是「行映射」跳变还是「列对齐」跳变。
+    _diff = np.abs(np.diff(front_rgb, axis=0)).mean(axis=(1, 2))
+    _k = int(np.argmax(_diff[:CELL_H - 1]))
+    print(f"[diag] cell grid 行间差异最大在第 {_k} 行（差 {_diff[_k]:.4f}），"
+          f"模型 y≈{Y1 - (_k + 0.5) / CELL_H * (Y1 - Y0):.3f}")
+    _lo = max(0, _k - 4)
+    print("[diag] 该处 rows:", np.round(rows[_lo:_k + 5], 1).tolist())
+    print("[diag] 该处 dy  :", np.round(dy[_lo:_k + 5, 0], 1).tolist())
+    print("[diag] rows 行差:", np.round(np.diff(rows[_lo:_k + 6]), 2).tolist())
+    print("[diag] dy   行差:", np.round(np.diff(dy[_lo:_k + 6, 0]), 2).tolist())
+    print("[diag] ramp 附近:", np.round(ramp[cell_rows[_lo:_k + 5]], 3).tolist())
 
     _mem("图集前")
     # 6. 图集：上半 2 大格（正/背），下半 4 小格（左/右/顶/底）
@@ -520,26 +708,57 @@ def main():
                          + rgb[r, c1][None, :] * ramp[0])
         return out
 
-    def skyline_strips(rgb, alpha, top=True):
-        """每个 x 位置取角色轮廓最上/最下方的像素色 —— 顶/底格的内容。
-        参考图只有正面视角，顶面只能这样近似（头顶=呆毛/发箍色，底部=鞋色）。"""
+    def skyline_strip(rgb, alpha, top=True, n=None):
+        """顶/底格的内容：每个 x 位置取角色轮廓最上/最下方的像素色。
+
+        返回 (n, n, 3)：行索引 = 深度 z 的分箱，列索引 = x 的分箱。
+        ⚠ 必须是 (z × x) 索引，和顶/底组的 UV 参数化一致 ——
+          之前条带是按「cell 行(y)」建的，UV 却用 z 去索引，坐标不自洽，
+          渲染出来就是一片乱纹。"""
         m = alpha > 0.5
         H_, W_ = m.shape
-        out = np.zeros((H_, W_, 3), dtype=np.float32)
+        out = np.zeros((n, n, 3), dtype=np.float32)
+        col_rgb = np.zeros((n, 3), dtype=np.float32)
         for c in range(W_):
             ys_ = np.where(m[:, c])[0]
             if len(ys_) == 0:
                 continue
             r = int(ys_.min()) if top else int(ys_.max())
-            out[:, c] = rgb[r, c]
+            ci = int(c / W_ * n)
+            col_rgb[ci] = rgb[r, c]
+        out[:] = col_rgb[None, :, :]
+        return out
+
+    def side_grid(rgb, alpha, side="L", n=None):
+        """侧面格内容：索引 = (高度, 深度)。
+
+        每一高度行取正面格里该行角色的左右轮廓，在这条轮廓内按深度比例扫一遍，
+        得到「从侧后方到侧前方」的颜色渐变 —— 单图没有侧视参考，
+        这是最接近的近似（比纯边缘色更连续，不会出现白斑）。"""
+        m = alpha > 0.5
+        H_, W_ = m.shape
+        out = np.zeros((n, n, 3), dtype=np.float32)
+        for ri in range(n):
+            cr = int(ri * H_ / n)
+            if cr >= H_:
+                break
+            xs_ = np.where(m[cr])[0]
+            if len(xs_) == 0:
+                continue
+            c0, c1 = int(xs_.min()), int(xs_.max())
+            if side == "R":
+                c0, c1 = c1, c0
+            for ci in range(n):
+                c = c0 + int(ci * abs(c1 - c0) / max(n - 1, 1))
+                out[ri, ci] = rgb[cr, np.clip(c, 0, W_ - 1)]
         return out
 
     side_h = LOW_H
-    blit(edge_strips(front_rgb, front_a, "L"), front_a, 0, LOW_Y, LOW_W, side_h)
-    blit(edge_strips(front_rgb, front_a, "R"), front_a, LOW_W, LOW_Y, LOW_W, side_h)
-    blit(skyline_strips(front_rgb, front_a, True), front_a,
+    blit(side_grid(front_rgb, front_a, "L", LOW_W), front_a, 0, LOW_Y, LOW_W, side_h)
+    blit(side_grid(front_rgb, front_a, "R", LOW_W), front_a, LOW_W, LOW_Y, LOW_W, side_h)
+    blit(skyline_strip(front_rgb, front_a, True, LOW_W), front_a,
          BACK_X, LOW_Y, LOW_W, LOW_W)
-    blit(skyline_strips(front_rgb, front_a, False), front_a,
+    blit(skyline_strip(front_rgb, front_a, False, LOW_W), front_a,
          BACK_X + LOW_W, LOW_Y, LOW_W, LOW_W)
     print(f"[dbg] atlas 下排探针 {atlas[1600,100]} {atlas[1600,1300]} {atlas[1600,1800]}")
 
@@ -558,9 +777,16 @@ def main():
         for kk in range(3):
             np.add.at(nrm, idx[:, kk], fn)
         nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
-    is_top = fn[:, 1] > 0.60
-    is_bot = fn[:, 1] < -0.60
-    is_back = (~is_top) & (~is_bot) & (fn[:, 2] < -0.05)
+    # ⚠ 顶/底阈值不能太松：发丝是细圆柱，切向面的小角度上翘就被判成「朝上」，
+    #   整片头发会被投到顶格（内容是轮廓最上像素 = 白色发箍）→ 渲染出白色拉丝。
+    #   0.85 只留真正的穹顶。
+    is_top = fn[:, 1] > 0.85
+    is_bot = fn[:, 1] < -0.85
+    # ⚠ 侧面**不单独成组**。试过按 ±X 法线主轴分侧格：侧面占 32% 面数，
+    #   侧格只有 768px 宽却要铺满整个裙摆深度 → 颜色被拉成竖条纹，
+    #   裙子的金刺绣和围裙的小鲸鱼全糊掉。
+    #   改成只按 ±Z 主视方向分正/背（深度缓冲自然遮挡），细节保留得更好。
+    is_back = (~is_top) & (~is_bot) & (fn[:, 2] < 0)
     group = np.where(is_top, 2, np.where(is_bot, 3, np.where(is_back, 5, 4)))
     print("[grp ]  顶 %.1f%%  底 %.1f%%  正 %.1f%%  背 %.1f%%" % (
         100 * is_top.mean(), 100 * is_bot.mean(),
@@ -572,34 +798,59 @@ def main():
     new_idx = np.arange(n_tris * 3, dtype=np.uint32).reshape(n_tris, 3)
     uv = np.zeros((n_tris * 3, 2), dtype=np.float64)
 
+    # ⚠⚠ UV 必须**直接取自 cell grid**，不能用朴素 box projection 重算：
+    #   正面格里的像素是按「逐行轮廓对齐 + PCHIP 纵向拉伸」光栅化出来的，
+    #   而 UV 若按 (x,y) 线性映射，两套映射根本不是一回事 →
+    #   渲染出来脸会整体错位（曾经就是这样：蝴蝶结跑到头顶）。
+    #   cell grid 是唯一真值来源，UV 照抄它的采样结果。
+    #   UV 指向「正面格里的像素」——正面格已经把参考图 warp 到模型投影域了，
+    #   所以 cell 的 (行, 列) 索引就是 UV。⚠ 不能拿 cols2（参考图列号）当列号，
+    #   那是另一套坐标，会把纹理整体错位（蝴蝶结跑到头顶就是这么来的）。
+    # ⚠ glTF 纹理原点在**左上**（v=0 是图像顶行）—— 写成 1.0-cr/size 会整张
+    #   贴图上下颠倒，渲染时头顶显示的是胸口的蝴蝶结。
     for t in np.where(group == 4)[0]:                       # 正面 (+Z)
         for kk in range(3):
             vi = int(idx[t, kk])
-            u = (pos[vi, 0] - X0) / (X1 - X0)
-            w = (pos[vi, 1] - Y0) / (Y1 - Y0)
-            px, py = u * CELL_W, (1.0 - w) * CELL_H
-            uv[t * 3 + kk] = (px / size, 1.0 - py / size)
+            cr, cc = cell_rows_v[vi], cell_cols_v[vi]
+            uv[t * 3 + kk] = (cc / size, cr / size)
     for t in np.where(group == 5)[0]:                       # 背面 (-Z)，镜像
         for kk in range(3):
             vi = int(idx[t, kk])
-            u = 1.0 - (pos[vi, 0] - X0) / (X1 - X0)
-            w = (pos[vi, 1] - Y0) / (Y1 - Y0)
-            px, py = BACK_X + u * CELL_W, (1.0 - w) * CELL_H
-            uv[t * 3 + kk] = (px / size, 1.0 - py / size)
+            cr, cc = cell_rows_v[vi], cell_cols_v[vi]
+            uv[t * 3 + kk] = ((BACK_X + (CELL_W - 1 - cc)) / size, cr / size)
     zmin, zmax = pos[:, 2].min(), pos[:, 2].max()
+    for t in np.where((group == 6) | (group == 7))[0]:      # 左/右侧面 (±X)
+        left = group[t] == 6
+        for kk in range(3):
+            vi = int(idx[t, kk])
+            u = (pos[vi, 2] - zmin) / max(zmax - zmin, 1e-9)     # 深度 → 列
+            v = (pos[vi, 1] - Y0) / max(Y1 - Y0, 1e-9)          # 高度 → 行
+            px = (0.0 if left else LOW_W) + u * LOW_W
+            py = LOW_Y + (1.0 - v) * LOW_H
+            uv[t * 3 + kk] = (px / size, py / size)
+
     for t in np.where((group == 2) | (group == 3))[0]:      # 顶/底 (±Y)
         top = group[t] == 2
         for kk in range(3):
             vi = int(idx[t, kk])
-            u = (pos[vi, 0] - X0) / (X1 - X0)
-            w = (pos[vi, 2] - zmin) / (zmax - zmin)
+            u = (pos[vi, 0] - X0) / (X1 - X0)          # x → 列
+            w = (pos[vi, 2] - zmin) / (zmax - zmin)    # z → 行
             px = (BACK_X if top else BACK_X + LOW_W) + u * LOW_W
             py = LOW_Y + (1.0 - w) * LOW_W
-            uv[t * 3 + kk] = (px / size, 1.0 - py / size)
+            uv[t * 3 + kk] = (px / size, py / size)
 
     # 8. 顶点色（不读贴图的查看器兜底）
+    # ⚠ glTF 的 uv.y=0 在图像**底部**，而 atlas 数组行 0 在顶部。
+    #   采样时必须用 (1 - v) 换算，否则顶点色上下颠倒 —— 渲染就会在头顶
+    #   显示胸口的蝴蝶结。这是个静默错误：UV 全对，只有顶点色错。
+    def _sample_atlas(a):
+        # glTF 纹理原点在**左上**：uv.v=0 → 图像第 0 行
+        _c = np.clip((uv[:, 0] * size).astype(int), 0, size - 1)
+        _r = np.clip((uv[:, 1] * size).astype(int), 0, size - 1)
+        return np.clip(a[_r, _c], 0, 1)
+
     samp = np.clip((uv * size).astype(int), 0, size - 1)
-    new_col = np.clip(atlas[samp[:, 1], samp[:, 0]], 0, 1)
+    new_col = _sample_atlas(atlas)
 
     # 8b. 按压缩率预滤波贴图（等价于给这张贴图生成 mipmap）
     #     度量：区域累计 UV 面积 / 可见 UV 面积 —— 细发丝层层重叠的地方
@@ -614,8 +865,7 @@ def main():
     print(f"[flt ] 区域压缩率 最大 {comp.max():.1f} / "
           f"高压缩像素占比 {100*(comp>2.0).mean():.1f}%")
     atlas = prefilter_by_compression(atlas, comp)
-    samp = np.clip((uv * size).astype(int), 0, size - 1)
-    new_col = np.clip(atlas[samp[:, 1], samp[:, 0]], 0, 1)
+    new_col = _sample_atlas(atlas)
 
     # 9. 贴图 PNG
     img = np.clip(atlas * 255.0 + 0.5, 0, 255).astype(np.uint8)
@@ -626,6 +876,36 @@ def main():
     print(f"[tex] {png_path}  {len(png_bytes):,} bytes")
     Image.fromarray((np.clip(front_rgb, 0, 1) * 255).astype(np.uint8)).save(
         os.path.join(outdir, "debug_front_aligned.png"))
+
+    # 9b. 诊断叠加图：把模型顶点在参考图上的「实际采样位置」画出来
+    #     （灰=全部顶点，红=头部顶点，蓝=采到肤色的顶点）
+    _cr = np.clip(np.round((Y1 - pos[:, 1]) / max(Y1 - Y0, 1e-9) * CELL_H - 0.5
+                           ).astype(int), 0, CELL_H - 1)
+    _cc = np.clip(np.round((pos[:, 0] - X0) / max(X1 - X0, 1e-9) * CELL_W - 0.5
+                           ).astype(int), 0, CELL_W - 1)
+    _vr = ref_row_of_bin[cell_rows][_cr]
+    _vc = cols2[_cr, _cc]
+    _dbg = Image.fromarray((np.clip(ref, 0, 1) * 255).astype(np.uint8)).convert("RGB")
+    _ov = Image.new("RGBA", _dbg.size, (0, 0, 0, 0))
+    _dd = ImageDraw.Draw(_ov)
+    for a, b in zip(_vc, _vr):
+        _dd.ellipse([a - 0.9, b - 0.9, a + 0.9, b + 0.9], fill=(255, 255, 255, 90))
+    _head = pos[:, 1] > 2.2
+    for a, b in zip(_vc[_head], _vr[_head]):
+        _dd.ellipse([a - 1.3, b - 1.3, a + 1.3, b + 1.3], fill=(255, 0, 0, 210))
+    _skin = (_vc >= 0) & (_vc < ref.shape[1]) & (_vr >= 0) & (_vr < ref.shape[0])
+    _sk = np.zeros(len(_vc), dtype=bool)
+    if _skin.any():
+        _c = np.clip(_vc[_skin].astype(int), 0, ref.shape[1] - 1)
+        _r = np.clip(_vr[_skin].astype(int), 0, ref.shape[0] - 1)
+        px = ref[_r, _c]
+        _sk[_skin] = (px[:, 0] > 0.72) & (px[:, 0] > px[:, 2] + 0.05) & (px[:, 1] > 0.5)
+    for a, b in zip(_vc[_sk], _vr[_sk]):
+        _dd.ellipse([a - 1.6, b - 1.6, a + 1.6, b + 1.6], fill=(0, 120, 255, 230))
+    Image.alpha_composite(_dbg.convert("RGBA"), _ov).convert("RGB").save(
+        os.path.join(outdir, "debug_sampling_overlay.png"))
+    print(f"[diag] 模型顶点 {len(_vc):,}，头部顶点 {int(_head.sum()):,}，"
+          f"采到肤色的 {int(_sk.sum()):,}（{_sk.sum()/max(len(_vc),1)*100:.1f}%）")
 
     # 10. 组装 GLB
     N = len(new_pos)

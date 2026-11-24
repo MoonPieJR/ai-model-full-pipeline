@@ -36,6 +36,34 @@ def srgb2lin(c):
     return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
 
 
+def boost_saturation(meshes, sat):
+    """给已有材质的 Base Color 链插一个 HSV 饱和度节点（GLB 自带贴图时用）。"""
+    if abs(sat - 1.0) < 1e-3:
+        return
+    done = set()
+    for o in meshes:
+        if o.type != "MESH":
+            continue
+        for m in o.data.materials:
+            if not m or not m.use_nodes or m.name in done:
+                continue
+            done.add(m.name)
+            nt = m.node_tree
+            bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+            if bsdf is None:
+                continue
+            sock = bsdf.inputs.get("Base Color")
+            if sock is None or not sock.links:
+                continue
+            src = sock.links[0].from_socket
+            hsv = nt.nodes.new("ShaderNodeHueSaturation")
+            hsv.location = (bsdf.location.x - 320, bsdf.location.y)
+            hsv.inputs["Saturation"].default_value = sat
+            nt.links.new(src, hsv.inputs["Color"])
+            nt.links.new(hsv.outputs["Color"], sock)
+    print(f"[mat]  已插入 HSV 饱和度节点 x{sat}")
+
+
 def setup_composite(bg_srgb):
     """透明渲染 + Alpha Over 到精确米白背景"""
     sc = bpy.context.scene
@@ -105,6 +133,9 @@ def main():
                         has_tex = True
     if has_tex:
         print("[mat]  沿用 GLB 自带 baseColorTexture 材质")
+        # ⚠ 沿用 GLB 材质时 sat 参数原本会被整个忽略（v6–v8 的色彩差异全部
+        #   来自灯光，饱和度节点根本没接上）。这里补一个 HSV 饱和度节点。
+        boost_saturation(meshes, sat)
     else:
         mat = bp.build_fixed_material(meshes, "WhaleChan_Fixed",
                                       color_boost=1.0, saturation=sat)
