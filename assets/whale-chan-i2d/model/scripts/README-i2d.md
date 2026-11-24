@@ -1,0 +1,209 @@
+# 鲸鱼娘 3D · Image-to-3D 流程（生图 → 转模 → Blender 修整）
+
+> 本目录是 **Fini.Yang 教程流程**的沙箱内复现版。
+> 参考：[别再用 GPT-Astra 从零捏人物了，这套 3D 流程更靠谱](https://x.com/FiniYang/status/2097527014375002196)
+> （Fini.Yang，2026-09-09 · 文章 ID 2097259059657486336）
+
+---
+
+## 一、教程原流程
+
+| 步 | 动作 | 工具 |
+|---|---|---|
+| ① | 准备角色参考（四视图更好） | — |
+| ② | **生图**：生成单个完整的 3D 手办效果图（白底、正面略带侧角、手臂离开身体、尾巴入镜） | GPT 生图 |
+| ③ | 选转模路线，先确认**能不能拿到文件** | TRELLIS.2 / Tripo 3.1 / Tripo 2.5 / 混元 3D |
+| ④ | 检查几何（脸/手/头发/衣服/尾巴有没有粘连长错）→ 确认纹理真的长在模型上 | 同上 |
+| ⑤ | 导出**带贴图的 GLB**，导入 Blender 确认颜色和贴图没丢 | 同上 |
+| ⑥ | 保留原始 GLB → 另存工程 → 渲染多角度找问题 → 针对缺陷修一版 | Astra + Blender |
+| ⑦ | 出高清 PNG + 转台 MP4，保留带材质/灯光/动画的 `.blend` | Blender |
+
+> 教程的核心结论：**从零写代码捏人物 = 翻车；先生图 → 转模型 → Blender 修整 = 第二版终于能看。**
+
+---
+
+## 二、本次的实际执行路径
+
+沙箱环境受限，教程里的三个转模服务**没有一个能直接用**：
+
+| 教程选项 | 沙箱实测 | 结论 |
+|---|---|---|
+| TRELLIS.2 官方试玩 | `trellis.microsoft.com` 443 不通 | ❌ |
+| TRELLIS.2 本地 | `huggingface.co` 不通；且沙箱 **2 核 CPU 无 GPU** | ❌ |
+| Tripo 3.1 / 2.5 | 域名不通 | ❌ |
+| Tripo 官方 API（connector） | **可用**，但该账户余额 `balance: 0`，所有生成类调用被账户侧拦截 | ❌ |
+| 混元 3D 2.1 在线试玩 | 域名可达，但 `GET /api/3d/getuserinfo` → **401**，需微信/QQ 登录 | ❌ |
+| **TripoSR（本地单图前馈重建）** | 权重走 `hf-mirror.com` 可达；**torchmcubes 有 CPU 版**；`run.py` 内置 CPU fallback | ✅ **采用** |
+
+所以第 ③ 步落到 **TripoSR**（Stability AI × Tripo AI，MIT 许可，LRM 架构单图前馈重建）。
+第 ② 步用 `matrix__generate_image`（走官方 image-generation skill 的参考图编辑通道）完成。
+
+---
+
+## 三、关键实现要点
+
+### 3.1 生图：参考图要按「图1 / 图2」传对象，不能传裸字符串
+
+`connector__matrix__generate_image` 的 `reference_images` 每项必须是
+`{"url": ..., "mime_type": ...}`。传裸字符串数组会让 connector 在执行层崩掉
+（`connector_tool_error ... latency_ms:0`），而不是返回上游的 400 校验错误。
+
+```json
+{"requests": [{"prompt": "...按图1、图2的参考...",
+               "reference_images": [{"url": "<temp_url>", "mime_type": "image/png"}]}]}
+```
+
+参考图取自 `Mizimo/whale-girl-visual-language-v4` 的 `whale-design.png`
+（基准设计稿）+ `Neko3000/deepseek-whalechan` 的 `neutral_standing_front_isolated.webp`
+（semi-chibi 正面图），均由 `fetch_reference.py` 按 SHA-256 校验拉取。
+
+### 3.2 抠背景：PIL `ImageDraw.floodfill` 替代 rembg
+
+教程流程用的是 `rembg`（u2net）。沙箱里装 rembg 会带进 onnxruntime + 模型下载，
+而我们的图是**纯米白背景**，用 floodfill 从画布四边泛洪即可：
+
+```python
+for pt in [(0,0), (w-1,0), (0,h-1), (w-1,h-1), ...]:
+    ImageDraw.floodfill(im, pt, (255,255,255,0), thresh=34)
+```
+
+floodfill 只填充**与种子连通**的区域，所以角色内部的米白色（围裙、珍珠、眼睛高光）不会被误抠。
+
+### 3.3 torchmcubes 装不上 → 用 scikit-image 顶替
+
+torchmcubes 要编译 CUDA 扩展，沙箱**没有 CUDA、没有 Python 开发头文件**
+（`Python.h` 缺失，`apt` 装不了 `python3-dev`）。
+`skimage.measure.marching_cubes` 是纯 numpy 实现，且索引约定与 torchmcubes 一致：
+
+```
+volume[i, j, k]  ↔  verts[:, 0]=i, verts[:, 1]=j, verts[:, 2]=k
+```
+
+见 `stubs/torchmcubes.py`。
+
+### 3.4 3GB 内存下要 mmap + 分块
+
+| 措施 | 原因 |
+|---|---|
+| `torch.load(..., mmap=True)` + `load_state_dict(assign=True)` | checkpoint 1.7GB；默认 `load_state_dict` 会复制一份 → 峰值 3.4GB → OOM |
+| 密度场**分块**采样（`CH = 1<<18`） | 一次性算 256³ 会让中间特征张量涨到 ~670MB |
+| 顶点色同样分块 | 同上 |
+| 密度场高斯平滑（σ=0.8） | marching cubes 在带噪等值面上会切出碎面 |
+
+### 3.5 Blender 侧：朝向与标度
+
+- TripoSR(internal z-up) → glTF(Y-up) → Blender(Z-up) 两次轴变换后，**人物正面朝世界 +Y**
+  （实测常量 `FACE_AZIM = 0`）。
+  曾尝试用「头部暗色顶点分布」自动探测正面，但单图重建时背面完全是推测的、
+  脸又被头发遮挡，颜色启发式会判反 —— 改为固定实测值。
+- **三角函数的朝向**：模型横躺时最长轴在 X，绕 Y 轴 −90° 把它转到 Z。
+- **平移要作用在顶层父级**：子对象被旋转过的 pivot 挂住后，它的局部 Z 不等于世界 Z，
+  直接改 `o.location.z` 会平移到错误方向。
+- 改 `scale` / `location` 后必须 `bpy.context.view_layer.update()`，
+  否则 `bound_box` 读到的还是旧矩阵（缩放「看起来没生效」）。
+
+### 3.6 Laplacian 平滑用 numpy 而不是 Blender modifier
+
+Blender 的 `LAPLACIANSMOOTH` modifier 在 5 万顶点网格上会直接**段错误**（3GB 内存）。
+改成纯 numpy 的一环邻域均值迭代（`blender_pipeline.laplacian_smooth`）。
+
+---
+
+## 四、产物
+
+| 文件 | 说明 |
+|---|---|
+| `model/whale-chan-i2d.glb` | 转模产物，10 万面，顶点色贴图 |
+| `model/whale-chan-i2d.blend` | 修整后工程（含材质/灯光/转台动画设置） |
+| `renders/*.png` | 1024² 四视角，Cycles 64 samples |
+| `video/whale-chan-turntable.mp4` | 转台视频，720² / 24fps / 6 秒 / 匀速一圈 |
+| `reference/figurine-prompt.md` | 生图用的完整 prompt（可复现） |
+| `reference/figurine-front.jpg` | 生图产物（转模的输入图） |
+
+---
+
+## 五、两个版本的对比
+
+同一角色的两条独立产出路线，各有取舍：
+
+| | 程序化重建版 | Image-to-3D 版（本目录） |
+|---|---|---|
+| 路线 | 参考图 → 量测 → 参数化放样 | 生图 → TripoSR 转模 → Blender 修整 |
+| 面数 | 28 部件 / 235 部件，干净拓扑 | 99,154 面，marching cubes 碎面已平滑 |
+| 头身比 | **精确 2.867**（规格可验证） | 由单图推测，不可控 |
+| 贴图 | 渐变着色器（发色 Z 轴渐变） | 顶点色（TripoSR 直接烘的） |
+| 脸部细节 | 眼/腮红/嘴为独立几何 | 糊（单图重建的固有短板） |
+| 背面 | 按规格构造，可控 | 推测（教程里「尾巴位置不对」的彩蛋就出在这） |
+| 可编辑性 | 高（每个部件独立） | 中（单网格） |
+
+**建议**：要做动画/打印/改细节 → 用程序化版；
+要快速拿到「手办质感」的带贴图资产 → 用 Image-to-3D 版。
+
+---
+
+## 六、许可
+
+- 本目录的脚本：MIT
+- 产出模型与渲染图：**CC BY-NC-SA 4.0**（禁止商用）
+- TripoSR 代码与权重：MIT（Stability AI × Tripo AI）
+- 角色形象著作权：上善无形（一创）→ ZipZipPipe（二创）→ 社区
+
+详见 `NOTICE.md`。
+
+---
+
+## 6. 颜色修复：三轮迭代与最终方案
+
+TripoSR 重建出来的**几何**其实很准（呆毛 / 鳍耳 / 蕾丝 / 裙褶 / 围裙 / 袜 / 鞋 / 尾巴
+全在），错的是**颜色**。实测数据：
+
+| 高度带 | 模型顶点色 (0-255) | 参考图角色色 (0-255) |
+|---|---|---|
+| 裙部 (0.62–0.75) | (124, 134, 153) | (74, 78, 116) |
+| 底部 (0.88–1.00) | (132, 147, 165) | (100, 93, 107) |
+
+模型整体**偏亮偏灰**（饱和度 0.26 vs 参考图 0.37），且在肩胸/领口位置
+残留少量高饱和紫洋红色点。
+
+### 试过但放弃的方案
+
+| 方案 | 结果 | 放弃原因 |
+|---|---|---|
+| 像素级反投影（参考图逐像素投回顶点） | 头发被染褐、裙子出现乱涂的金色刺绣线 | 空间对齐误差会把颜色"糊"到错误部位；单图重建的背面完全是推测，风险 > 收益 |
+| 分带 + 色相偏移迁移 | 整体变成粉紫，**原有色斑被放大** | ΔH 最大到 +0.24，把蓝直接推成红紫 |
+| 全局色相迁移 | 同上 | 同上 |
+
+### 最终方案（三步，全部零空间对齐）
+
+1. **`band_transfer.py` — 分带色调迁移**
+   模型与参考图各按归一化高度切 8 带，每带独立算 `ΔH / kS / kV`。
+   两边都**剔除近白像素**（亮度 > 0.86）—— 参考图里蕾丝/围裙/袜子是大面积白色，
+   计入统计会把目标明度拉高，迁移方向会反过来（越迁越亮）。
+   最终取 **ΔH = 0**（只提饱和度，不动色相，避免放大色斑）、
+   **kS = 1.45**、**kV = 0.88**。
+
+2. **`despeckle_glb.py` — 色点抹平**
+   从 GLB 的 `indices` 建顶点邻接表（纯 numpy，不需要 Blender），
+   把"色相落在紫洋红区且饱和度 > 0.22"的 **1,830 个错误色点**
+   用邻居顶点平均色替换（抹平，而非硬改成某个颜色）。
+   合法暖色只有皮肤（低饱和淡粉）与金色，故阈值取 S > 0.22 可安全区分。
+
+3. **渲染侧** — 材质饱和度 1.75、灯光 Key 80 / Fill 28 / Rim 60、World 0.30，
+   背景用 **compositor Alpha Over 到精确米白**（sRGB 240,226,215，与参考图一致）。
+   World 强度同时决定环境光和背景色，两者解不开；分开后背景才能对得上参考图。
+
+### 两个色彩空间的坑
+
+| 坑 | 现象 | 结论 |
+|---|---|---|
+| Blender `image.pixels` **不做** sRGB→线性转换 | 参考图统计 V=0.71，实际应为 0.46 | 读到的已是 sRGB 值，**别再转一次** |
+| Blender glTF 导出器**丢顶点色** | 警告 `The active Vertex Color will not be exported` | "带贴图 GLB"是核心交付物 → **直接在 GLB 二进制层改写 COLOR_0** |
+
+### 剩余瑕疵
+
+- 面部特征仍模糊（TripoSR 单图分辨率上限）
+- 胸前残余少量紫调（H 0.65–0.68 区间，位于阈值边缘，再降会伤及正常蓝紫过渡）
+- 裙身细条纹在重建后偏浅（原始分辨率不足，深蓝保留不完整）
+- 背面（尤其尾巴根部）为模型推测
+
+这四点属于 image-to-3D 路线的固有限制，不是管线 bug。
