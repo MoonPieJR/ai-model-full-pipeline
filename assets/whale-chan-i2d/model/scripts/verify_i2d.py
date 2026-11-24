@@ -101,7 +101,10 @@ def main():
 
     # G1 blend
     print("── G1 Blender 工程 ──")
+    # 兼容两种布局：开发态（blend 在根目录）与发布态（blend 在 model/ 下）
     blend = os.path.join(R, "whale-chan-i2d.blend")
+    if not os.path.exists(blend):
+        blend = os.path.join(R, "model", "whale-chan-i2d.blend")
     if os.path.exists(blend):
         with open(blend, "rb") as f:
             head = f.read(12)
