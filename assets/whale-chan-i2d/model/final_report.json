@@ -1,0 +1,52 @@
+{
+  "source_glb": "/workspace/i2d/texout/whale-chan-i2d.glb",
+  "vertices": 297462,
+  "faces": 99154,
+  "bbox": {
+    "min": [
+      -1.0461,
+      -0.8473,
+      0.0
+    ],
+    "max": [
+      0.8951,
+      0.6437,
+      2.87
+    ]
+  },
+  "height_bu": 2.87,
+  "width_bu": 1.9413,
+  "depth_bu": 1.491,
+  "render": {
+    "samples": 64,
+    "res": 1024,
+    "bg_srgb": [
+      0.9411764705882353,
+      0.8862745098039215,
+      0.8431372549019608
+    ],
+    "sat": 1.75,
+    "key": 80.0,
+    "fill": 28.0,
+    "rim": 60.0,
+    "world": 0.3
+  },
+  "turntable": {
+    "seconds": 5,
+    "fps": 24,
+    "res": 512,
+    "samples": 32,
+    "denoise": false
+  },
+  "outputs": {
+    "blend": "whale-chan-i2d.blend",
+    "glb": "whale-chan-i2d.glb",
+    "renders": [
+      "renders/front.png",
+      "renders/side.png",
+      "renders/back.png",
+      "renders/three-quarter.png"
+    ],
+    "video": "video/whale-chan-turntable.mp4"
+  }
+}
