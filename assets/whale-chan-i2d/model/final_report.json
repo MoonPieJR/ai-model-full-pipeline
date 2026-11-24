@@ -1,5 +1,5 @@
 {
-  "source_glb": "/workspace/i2d/texout/whale-chan-i2d.glb",
+  "source_glb": "/run/csi/mount-root/nas/eab0d61a99b6696edb3d2aff87b585e8/i2d/refout/whale-chan-i2d.glb",
   "vertices": 297462,
   "faces": 99154,
   "bbox": {
@@ -18,18 +18,18 @@
   "width_bu": 1.9413,
   "depth_bu": 1.491,
   "render": {
-    "samples": 64,
+    "samples": 48,
     "res": 1024,
     "bg_srgb": [
       0.9411764705882353,
       0.8862745098039215,
       0.8431372549019608
     ],
-    "sat": 1.75,
-    "key": 80.0,
-    "fill": 28.0,
-    "rim": 60.0,
-    "world": 0.3
+    "sat": 1.0,
+    "key": 50.0,
+    "fill": 18.0,
+    "rim": 38.0,
+    "world": 0.22
   },
   "turntable": {
     "seconds": 5,

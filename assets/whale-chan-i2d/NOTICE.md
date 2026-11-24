@@ -72,8 +72,11 @@
 2. 由 TripoSR 做**单图前馈三维重建**，背面、底部为模型推测；
 3. 在 Blender 中做**朝向矫正、顶点色重建（CORNER→VERTEX 聚合）、Laplacian 平滑、
    灯光与构图调整**；
-4. 顶点色再经**分带色调迁移**与**色点抹平**，随后用自写的 box projection 烘焙成
-   **2048² UV 纹理贴图**（UV + baseColorTexture + COLOR_0 三通道齐备）。
+4. **贴图 v2（重做）**：不再使用重建网格自带的顶点色作颜色源头（TripoSR 把原图
+   的深藏青/白围裙全洗成了灰白），改为把**参考图本身作为唯一色彩真值**，
+   经「抠像 → 剪影 IoU 配准（含左右镜像判定）→ 去光照 → 正交/逐行轮廓投影 →
+   按压缩率预滤波」烘焙成 **3072² UV 纹理贴图**
+   （UV + baseColorTexture + COLOR_0 三通道齐备）。
 
 原画的著作权与署名权归上述作者所有。
 
@@ -83,7 +86,7 @@
 |---|---|
 | `model/whale-chan-i2d.blend` | Blender 工程（材质/灯光/相机） |
 | `model/whale-chan-i2d.glb` | 带 UV + 内嵌 baseColorTexture + 顶点色的 GLB |
-| `model/whale-chan-i2d-basecolor.png` | 独立贴图（2048²） |
+| `model/whale-chan-i2d-basecolor.png` | 独立贴图（3072²，参考图正交投影） |
 | `renders/*.png` | 四视角 1024² 渲染图 |
 | `video/whale-chan-turntable.mp4` | 转台动画 |
 
