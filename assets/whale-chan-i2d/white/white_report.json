@@ -1,0 +1,94 @@
+{
+  "white-high": {
+    "verts": 49449,
+    "faces": 98922,
+    "size": [
+      2.864,
+      1.487,
+      1.936
+    ],
+    "files": {
+      "GLB": {
+        "path": "/workspace/i2d/white/white-high.glb",
+        "bytes": 1781368
+      },
+      "FBX": {
+        "path": "/workspace/i2d/white/white-high.fbx",
+        "bytes": 2081356
+      },
+      "OBJ": {
+        "path": "/workspace/i2d/white/white-high.obj",
+        "bytes": 6648298
+      }
+    }
+  },
+  "white-voxel0014": {
+    "verts": 10344,
+    "faces": 10344,
+    "size": [
+      2.87,
+      1.481,
+      1.927
+    ],
+    "files": {
+      "GLB": {
+        "path": "/workspace/i2d/white/white-voxel0014.glb",
+        "bytes": 373448
+      },
+      "FBX": {
+        "path": "/workspace/i2d/white/white-voxel0014.fbx",
+        "bytes": 404044
+      },
+      "OBJ": {
+        "path": "/workspace/i2d/white/white-voxel0014.obj",
+        "bytes": 1039863
+      }
+    }
+  },
+  "white-voxel002": {
+    "verts": 4826,
+    "faces": 4824,
+    "size": [
+      2.87,
+      1.465,
+      1.92
+    ],
+    "files": {
+      "GLB": {
+        "path": "/workspace/i2d/white/white-voxel002.glb",
+        "bytes": 174776
+      },
+      "FBX": {
+        "path": "/workspace/i2d/white/white-voxel002.fbx",
+        "bytes": 195996
+      },
+      "OBJ": {
+        "path": "/workspace/i2d/white/white-voxel002.obj",
+        "bytes": 479182
+      }
+    }
+  },
+  "white-quad": {
+    "verts": 29559,
+    "faces": 29562,
+    "size": [
+      2.87,
+      1.477,
+      1.92
+    ],
+    "files": {
+      "GLB": {
+        "path": "/workspace/i2d/white/white-quad.glb",
+        "bytes": 1065232
+      },
+      "FBX": {
+        "path": "/workspace/i2d/white/white-quad.fbx",
+        "bytes": 1095644
+      },
+      "OBJ": {
+        "path": "/workspace/i2d/white/white-quad.obj",
+        "bytes": 3136297
+      }
+    }
+  }
+}

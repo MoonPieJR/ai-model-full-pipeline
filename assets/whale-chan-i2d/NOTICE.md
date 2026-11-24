@@ -90,6 +90,12 @@
 | `model/whale-chan-i2d-basecolor.png` | 独立贴图（3072²，参考图正交投影） |
 | `renders/*.png` | 四视角 1024² 渲染图 |
 | `video/whale-chan-turntable.mp4` | 转台动画 |
+| `white/white-voxel0014.glb` | **白模（主推）**：重网格后的干净几何，10,344 顶点 |
+| `white/white-voxel002.glb` | 白模（轻量）：4,826 顶点 |
+| `white/white-quad.glb` | 白模（四边面）：29,559 顶点，适合手工雕刻 |
+| `white/white-high.glb` | 白模（高模原拓扑）：49,449 顶点，**头部不可贴脸** |
+| `white/white-clean.blend` | 白模工程（4 个版本 + 灰材质 + 相机灯光） |
+| `white/WHITE-MODEL.md` | 白模说明：处理链、版本取舍、坐标约定、贴图/绑骨注意事项 |
 
 ---
 

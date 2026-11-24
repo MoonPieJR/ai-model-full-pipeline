@@ -1,0 +1,227 @@
+{
+  "mixamorig:Hips": [
+    0.0,
+    0.0,
+    0.47
+  ],
+  "mixamorig:Spine": [
+    0.0,
+    0.0,
+    0.53
+  ],
+  "mixamorig:Spine1": [
+    0.0,
+    0.0,
+    0.59
+  ],
+  "mixamorig:Spine2": [
+    0.0,
+    0.0,
+    0.66
+  ],
+  "mixamorig:Neck": [
+    0.0,
+    0.0,
+    0.76
+  ],
+  "mixamorig:Head": [
+    0.0,
+    0.0,
+    0.81
+  ],
+  "mixamorig:Head|tail": [
+    0.0,
+    0.0,
+    0.99
+  ],
+  "mixamorig:LeftShoulder": [
+    -0.03,
+    0.0,
+    0.69
+  ],
+  "mixamorig:LeftShoulder|tail": [
+    -0.075,
+    0.0,
+    0.705
+  ],
+  "mixamorig:LeftArm": [
+    -0.075,
+    0.0,
+    0.705
+  ],
+  "mixamorig:LeftArm|tail": [
+    -0.105,
+    0.0,
+    0.65
+  ],
+  "mixamorig:LeftForeArm": [
+    -0.105,
+    0.0,
+    0.65
+  ],
+  "mixamorig:LeftForeArm|tail": [
+    -0.13,
+    0.0,
+    0.6
+  ],
+  "mixamorig:LeftHand": [
+    -0.13,
+    0.0,
+    0.6
+  ],
+  "mixamorig:LeftHand|tail": [
+    -0.15,
+    0.0,
+    0.57
+  ],
+  "mixamorig:RightShoulder": [
+    0.03,
+    0.0,
+    0.69
+  ],
+  "mixamorig:RightShoulder|tail": [
+    0.075,
+    0.0,
+    0.705
+  ],
+  "mixamorig:RightArm": [
+    0.075,
+    0.0,
+    0.705
+  ],
+  "mixamorig:RightArm|tail": [
+    0.105,
+    0.0,
+    0.65
+  ],
+  "mixamorig:RightForeArm": [
+    0.105,
+    0.0,
+    0.65
+  ],
+  "mixamorig:RightForeArm|tail": [
+    0.13,
+    0.0,
+    0.6
+  ],
+  "mixamorig:RightHand": [
+    0.13,
+    0.0,
+    0.6
+  ],
+  "mixamorig:RightHand|tail": [
+    0.15,
+    0.0,
+    0.57
+  ],
+  "mixamorig:LeftUpLeg": [
+    -0.045,
+    0.0,
+    0.47
+  ],
+  "mixamorig:LeftUpLeg|tail": [
+    -0.048,
+    0.0,
+    0.3
+  ],
+  "mixamorig:LeftLeg": [
+    -0.048,
+    0.0,
+    0.3
+  ],
+  "mixamorig:LeftLeg|tail": [
+    -0.05,
+    0.0,
+    0.12
+  ],
+  "mixamorig:LeftFoot": [
+    -0.05,
+    0.0,
+    0.12
+  ],
+  "mixamorig:LeftFoot|tail": [
+    -0.05,
+    -0.075,
+    0.04
+  ],
+  "mixamorig:LeftToeBase": [
+    -0.05,
+    -0.075,
+    0.04
+  ],
+  "mixamorig:LeftToeBase|tail": [
+    -0.05,
+    -0.115,
+    0.025
+  ],
+  "mixamorig:RightUpLeg": [
+    0.045,
+    0.0,
+    0.47
+  ],
+  "mixamorig:RightUpLeg|tail": [
+    0.048,
+    0.0,
+    0.3
+  ],
+  "mixamorig:RightLeg": [
+    0.048,
+    0.0,
+    0.3
+  ],
+  "mixamorig:RightLeg|tail": [
+    0.05,
+    0.0,
+    0.12
+  ],
+  "mixamorig:RightFoot": [
+    0.05,
+    0.0,
+    0.12
+  ],
+  "mixamorig:RightFoot|tail": [
+    0.05,
+    -0.075,
+    0.04
+  ],
+  "mixamorig:RightToeBase": [
+    0.05,
+    -0.075,
+    0.04
+  ],
+  "mixamorig:RightToeBase|tail": [
+    0.05,
+    -0.115,
+    0.025
+  ],
+  "WhaleTail_1": [
+    0.0,
+    -0.04,
+    0.45
+  ],
+  "WhaleTail_1|tail": [
+    -0.18,
+    -0.09,
+    0.43
+  ],
+  "WhaleTail_2": [
+    -0.18,
+    -0.09,
+    0.43
+  ],
+  "WhaleTail_2|tail": [
+    -0.4,
+    -0.14,
+    0.4
+  ],
+  "WhaleTail_3": [
+    -0.4,
+    -0.14,
+    0.4
+  ],
+  "WhaleTail_3|tail": [
+    -0.62,
+    -0.19,
+    0.38
+  ]
+}
